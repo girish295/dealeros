@@ -4,27 +4,27 @@ const API_BASE = 'http://127.0.0.1:8000/api/disagreements/'
 
 const REASONS = [
   { value: 'ALL', label: 'All Disagreements' },
-  { value: 'MISSING_IN_B', label: 'Missing in System B' },
-  { value: 'ORPHAN_IN_B', label: 'Orphan in System B' },
-  { value: 'DUPLICATE_IN_B', label: 'Duplicate in System B' },
-  { value: 'VALUE_MISMATCH', label: 'Value Mismatch' },
-  { value: 'LOCATION_MISMATCH', label: 'Location Mismatch' },
-  { value: 'DATE_MISMATCH', label: 'Date Mismatch' },
-  { value: 'VOIDED_RECORD_ACTIVE_IN_B', label: 'Voided in A but active in B' },
+  { value: 'MISSING_IN_B', label: 'MISSING_IN_B' },
+  { value: 'ORPHAN_IN_B', label: 'ORPHAN_IN_B' },
+  { value: 'DUPLICATE_IN_B', label: 'DUPLICATE_IN_B' },
+  { value: 'VALUE_MISMATCH', label: 'VALUE_MISMATCH' },
+  { value: 'LOCATION_MISMATCH', label: 'LOCATION_MISMATCH' },
+  { value: 'DATE_MISMATCH', label: 'DATE_MISMATCH' },
+  { value: 'VOIDED_RECORD_ACTIVE_IN_B', label: 'VOIDED_RECORD_ACTIVE_IN_B' },
 ]
 
 export default function App() {
   const [org, setOrg] = useState('ORG-A')
   const [reason, setReason] = useState('ALL')
-  const [sortField, setSortField] = useState('')
-  const [sortOrder, setSortOrder] = useState('asc')
+  const [sort, setSort] = useState('') // "" -> "-value" -> "value" -> ""
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
+  // Fetch when org, reason, or sort changes
   useEffect(() => {
     fetchDisagreements()
-  }, [org, reason, sortField, sortOrder])
+  }, [org, reason, sort])
 
   const fetchDisagreements = async () => {
     setLoading(true)
@@ -32,140 +32,220 @@ export default function App() {
     try {
       const params = new URLSearchParams()
       params.append('org', org)
+
       if (reason && reason !== 'ALL') {
         params.append('reason', reason)
       }
-      if (sortField) {
-        const sortParam = sortOrder === 'desc' ? `-${sortField}` : sortField
-        params.append('sort', sortParam)
+
+      if (sort) {
+        params.append('sort', sort)
       }
 
       const res = await fetch(`${API_BASE}?${params.toString()}`)
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}))
-        throw new Error(data.error || `Server returned ${res.status}`)
+        const errorData = await res.json().catch(() => ({}))
+        throw new Error(errorData.error || `Server responded with status ${res.status}`)
       }
       const data = await res.json()
       setItems(data)
     } catch (err) {
-      setError(err.message || 'Failed to fetch disagreements')
+      setError(
+        err.message === 'Failed to fetch'
+          ? 'Failed to fetch from backend. Ensure the Django server is running on http://127.0.0.1:8000'
+          : err.message
+      )
+      setItems([])
     } finally {
       setLoading(false)
     }
   }
 
-  const handleSort = (field) => {
-    if (sortField === field) {
-      setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortField(field)
-      setSortOrder('asc')
-    }
+  // Cycle sort order: "" -> "-value" -> "value" -> ""
+  const handleSortCycle = () => {
+    setSort(prev => {
+      if (prev === '') return '-value'
+      if (prev === '-value') return 'value'
+      return ''
+    })
   }
 
-  const formatCurrency = (val) => {
-    if (val === null || val === undefined || val === '') {
-      return <span className="cell-empty">—</span>
+  // Format monetary value with 2 decimal places, or render "" if null/blank/missing
+  const formatAmount = (val) => {
+    if (val === null || val === undefined || val === '') return ''
+    const num = Number(val)
+    if (isNaN(num)) return ''
+    return num.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  }
+
+  // Compute Difference as a_value - b_value only when both are present; otherwise ""
+  const computeDifference = (aVal, bVal) => {
+    if (
+      aVal === null ||
+      aVal === undefined ||
+      aVal === '' ||
+      bVal === null ||
+      bVal === undefined ||
+      bVal === ''
+    ) {
+      return ''
     }
-    const num = parseFloat(val)
-    if (isNaN(num)) return <span className="cell-empty">—</span>
-    return num.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+    const numA = Number(aVal)
+    const numB = Number(bVal)
+    if (isNaN(numA) || isNaN(numB)) return ''
+    const diff = numA - numB
+    return diff.toLocaleString('en-US', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  }
+
+  const renderSortIndicator = () => {
+    if (sort === '-value') return <span className="sort-indicator active">▼</span>
+    if (sort === 'value') return <span className="sort-indicator active">▲</span>
+    return <span className="sort-indicator">↕</span>
   }
 
   return (
-    <div className="container">
-      <header>
-        <h1>DealerOS Reconciliation Ledger</h1>
-        <p>Tenant-isolated comparison between System A and System B ledgers</p>
-      </header>
-
-      {error && (
-        <div className="error-banner">
-          <strong>Error:</strong> {error}
+    <div className="app-layout">
+      {/* 1. Top Header Bar */}
+      <header className="top-header">
+        <div className="header-brand">
+          <span className="brand-badge">DealerOS</span>
+          <h1 className="header-title">Ledger Reconciliation Console</h1>
         </div>
-      )}
-
-      <div className="controls-card">
-        <div className="control-group">
-          <label htmlFor="org-select">Tenant (Organization)</label>
+        <div className="tenant-selector-group">
+          <label htmlFor="tenant-select" className="tenant-label">
+            Tenant:
+          </label>
           <select
-            id="org-select"
+            id="tenant-select"
+            className="tenant-select"
             value={org}
             onChange={(e) => setOrg(e.target.value)}
           >
-            <option value="ORG-A">ORG-A (LOC-101 .. LOC-103)</option>
-            <option value="ORG-B">ORG-B (LOC-201 .. LOC-202)</option>
+            <option value="ORG-A">ORG-A (Locations 101–103)</option>
+            <option value="ORG-B">ORG-B (Locations 201–202)</option>
           </select>
         </div>
+      </header>
 
-        <div className="control-group">
-          <label htmlFor="reason-select">Filter by Reason</label>
-          <select
-            id="reason-select"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-          >
-            {REASONS.map(r => (
-              <option key={r.value} value={r.value}>{r.label}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="summary-stats">
-          <span className="stat-pill">
-            Showing: <strong>{items.length}</strong> items
-          </span>
-        </div>
-      </div>
-
-      <div className="table-card">
-        {loading ? (
-          <div className="loading">Loading ledger entries...</div>
-        ) : items.length === 0 ? (
-          <div className="empty-message">
-            No disagreements found for the selected tenant and filter.
+      <main className="main-container">
+        {/* Error Banner */}
+        {error && (
+          <div className="error-banner" role="alert">
+            <span className="error-icon">⚠️</span>
+            <div className="error-content">
+              <strong>Connection Error:</strong> {error}
+            </div>
+            <button className="error-retry-btn" onClick={fetchDisagreements}>
+              Retry
+            </button>
           </div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Reason</th>
-                <th className="sortable" onClick={() => handleSort('record_id')}>
-                  Record ID {sortField === 'record_id' ? (sortOrder === 'asc' ? '▲' : '▼') : ''}
-                </th>
-                <th>Location</th>
-                <th className="cell-num sortable" onClick={() => handleSort('a_value')}>
-                  System A Value {sortField === 'a_value' ? (sortOrder === 'asc' ? '▲' : '▼') : ''}
-                </th>
-                <th className="cell-num sortable" onClick={() => handleSort('b_value')}>
-                  System B Value {sortField === 'b_value' ? (sortOrder === 'asc' ? '▲' : '▼') : ''}
-                </th>
-                <th className="cell-num sortable" onClick={() => handleSort('difference')}>
-                  Difference {sortField === 'difference' ? (sortOrder === 'asc' ? '▲' : '▼') : ''}
-                </th>
-                <th>Audit Notes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((row, idx) => (
-                <tr key={`${row.reason}-${row.record_id}-${idx}`}>
-                  <td>
-                    <span className={`badge badge-${row.reason}`}>
-                      {row.reason}
-                    </span>
-                  </td>
-                  <td><strong>{row.record_id}</strong></td>
-                  <td>{row.location}</td>
-                  <td className="cell-num">{formatCurrency(row.a_value)}</td>
-                  <td className="cell-num">{formatCurrency(row.b_value)}</td>
-                  <td className="cell-num">{formatCurrency(row.difference)}</td>
-                  <td style={{ fontSize: '13px', color: '#475569' }}>{row.details}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
         )}
-      </div>
+
+        {/* 2. Toolbar above the table */}
+        <div className="toolbar-card">
+          <div className="toolbar-left">
+            <h2 className="toolbar-heading">Disagreements</h2>
+            <span className="pill-badge">
+              {items.length} {items.length === 1 ? 'record' : 'records'}
+            </span>
+          </div>
+
+          <div className="toolbar-right">
+            <label htmlFor="reason-filter" className="filter-label">
+              Filter by Reason:
+            </label>
+            <select
+              id="reason-filter"
+              className="reason-select"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+            >
+              {REASONS.map(r => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        {/* 3. Main Table Card */}
+        <div className="table-card">
+          {loading ? (
+            <div className="table-status-message">
+              <div className="spinner"></div>
+              <span>Loading ledger disagreements...</span>
+            </div>
+          ) : items.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state-icon">📋</div>
+              <h3 className="empty-state-title">No disagreements found</h3>
+              <p className="empty-state-desc">
+                No ledger discrepancies detected for the selected tenant and reason filter.
+              </p>
+            </div>
+          ) : (
+            <div className="table-wrapper">
+              <table className="reconciliation-table">
+                <thead>
+                  <tr>
+                    <th className="col-reason">Reason</th>
+                    <th className="col-record">Record ID</th>
+                    <th className="col-location">Location</th>
+                    <th className="col-num">System A Value</th>
+                    <th
+                      className="col-num col-sortable"
+                      onClick={handleSortCycle}
+                      title="Click to cycle sort: Descending -> Ascending -> Default"
+                    >
+                      <span>System B Value</span>
+                      {renderSortIndicator()}
+                    </th>
+                    <th className="col-num">Difference</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((row, idx) => {
+                    const diffFormatted = computeDifference(row.a_value, row.b_value)
+                    const aFormatted = formatAmount(row.a_value)
+                    const bFormatted = formatAmount(row.b_value)
+
+                    return (
+                      <tr key={`${row.reason}-${row.record_id}-${idx}`}>
+                        <td className="col-reason">
+                          <span className={`reason-pill badge-${row.reason}`}>
+                            {row.reason}
+                          </span>
+                        </td>
+                        <td className="col-record">
+                          <span className="record-id">{row.record_id}</span>
+                        </td>
+                        <td className="col-location">
+                          <span className="location-tag">{row.location}</span>
+                        </td>
+                        <td className="col-num font-tabular">
+                          {aFormatted}
+                        </td>
+                        <td className="col-num font-tabular">
+                          {bFormatted}
+                        </td>
+                        <td className="col-num font-tabular font-semibold">
+                          {diffFormatted}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </main>
     </div>
   )
 }
